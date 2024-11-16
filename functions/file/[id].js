@@ -46,8 +46,43 @@ export async function onRequest(context) {  // Contents of context object
     const fileName = imgRecord.metadata?.FileName || params.id;
     const encodedFileName = encodeURIComponent(fileName);
     const fileType = imgRecord.metadata?.FileType || null;
-    //const TgFileID = params.id.split('.')[0]; // 文件 ID
+    
+    // 检查文件可访问状态
+    let accessRes = await returnWithCheck(request, env, url, imgRecord);
+    if (accessRes.status !== 200) {
+        return accessRes; // 如果不可访问，直接返回
+    }
 
+    // Cloudflare R2渠道
+    if (imgRecord.metadata?.Channel === 'CloudflareR2') {
+        // 检查是否配置了R2
+        if (typeof env.img_r2 == "undefined" || env.img_r2 == null || env.img_r2 == "") {
+            return new Response('Error: Please configure R2 database', { status: 500 });
+        }
+        
+        const R2DataBase = env.img_r2;
+        const object = await R2DataBase.get(params.id);
+
+        if (object === null) {
+            return new Response('Error: Failed to fetch image', { status: 500 });
+        }
+
+        const headers = new Headers();
+        object.writeHttpMetadata(headers)
+        headers.set('Content-Disposition', `inline; filename="${encodedFileName}"; filename*=UTF-8''${encodedFileName}`);
+        if (fileType) {
+            headers.set('Content-Type', fileType);
+        }
+
+        const newRes = new Response(object.body, {
+            status: 200,
+            headers,
+        });
+
+        return newRes;
+    }
+
+    // Telegram及Telegraph渠道
     let TgFileID = ''; // Tg的file_id
     if (imgRecord.metadata?.Channel === 'Telegram') {
         // id为file_id + ext
@@ -94,51 +129,57 @@ export async function onRequest(context) {  // Contents of context object
         });
 
         if (response.ok) {
-            // Referer header equal to the dashboard page
-            if (request.headers.get('Referer') == url.origin + "/dashboard") {
-                //show the image
-                return newRes;
-            }
-
-            if (typeof env.img_url == "undefined" || env.img_url == null || env.img_url == "") { } else {
-                //check the record from kv
-                const record = await env.img_url.getWithMetadata(params.id);
-                if (record.metadata === null) {
-                } else {
-                    //if the record is not null, redirect to the image
-                    if (record.metadata.ListType == "White") {
-                        return newRes;
-                    } else if (record.metadata.ListType == "Block") {
-                        console.log("Referer")
-                        console.log(request.headers.get('Referer'))
-                        if (typeof request.headers.get('Referer') == "undefined" || request.headers.get('Referer') == null || request.headers.get('Referer') == "") {
-                            return Response.redirect(url.origin + "/blockimg", 302)
-                        } else {
-                            return new Response('Error: Image Blocked', { status: 404 });
-                        }
-
-                    } else if (record.metadata.Label == "adult") {
-                        if (typeof request.headers.get('Referer') == "undefined" || request.headers.get('Referer') == null || request.headers.get('Referer') == "") {
-                            return Response.redirect(url.origin + "/blockimg", 302)
-                        } else {
-                            return new Response('Error: Image Blocked', { status: 404 });
-                        }
-                    }
-                    //check if the env variables WhiteList_Mode are set
-                    if (env.WhiteList_Mode == "true") {
-                        //if the env variables WhiteList_Mode are set, redirect to the image
-                        return Response.redirect(url.origin + "/whiteliston", 302);
-                    } else {
-                        //if the env variables WhiteList_Mode are not set, redirect to the image
-                        return newRes;
-                    }
-                }
-            }
+            return newRes;
         }
         return newRes;
     } catch (error) {
         return new Response('Error: ' + error, { status: 500 });
     }
+}
+
+async function returnWithCheck(request, env, url, imgRecord) {
+    const response = new Response('good', { status: 200 });
+
+    // Referer header equal to the dashboard page
+    if (request.headers.get('Referer') == url.origin + "/dashboard") {
+        //show the image
+        return response;
+    }
+
+    if (typeof env.img_url == "undefined" || env.img_url == null || env.img_url == "") { } else {
+        //check the record from kv
+        const record = imgRecord;
+        if (record.metadata === null) {
+        } else {
+            //if the record is not null, redirect to the image
+            if (record.metadata.ListType == "White") {
+                return response;
+            } else if (record.metadata.ListType == "Block") {
+                if (typeof request.headers.get('Referer') == "undefined" || request.headers.get('Referer') == null || request.headers.get('Referer') == "") {
+                    return Response.redirect(url.origin + "/blockimg", 302)
+                } else {
+                    return new Response('Error: Image Blocked', { status: 404 });
+                }
+
+            } else if (record.metadata.Label == "adult") {
+                if (typeof request.headers.get('Referer') == "undefined" || request.headers.get('Referer') == null || request.headers.get('Referer') == "") {
+                    return Response.redirect(url.origin + "/blockimg", 302)
+                } else {
+                    return new Response('Error: Image Blocked', { status: 404 });
+                }
+            }
+            //check if the env variables WhiteList_Mode are set
+            if (env.WhiteList_Mode == "true") {
+                //if the env variables WhiteList_Mode are set, redirect to the image
+                return Response.redirect(url.origin + "/whiteliston", 302);
+            } else {
+                //if the env variables WhiteList_Mode are not set, redirect to the image
+                return response;
+            }
+        }
+    }
+    // other cases
+    return response;
 }
 
 async function getFileContent(request, max_retries = 2) {
