@@ -53,6 +53,8 @@ export async function onRequest(context) {  // Contents of context object
         return accessRes; // 如果不可访问，直接返回
     }
 
+
+
     // Cloudflare R2渠道
     if (imgRecord.metadata?.Channel === 'CloudflareR2') {
         // 检查是否配置了R2
@@ -70,10 +72,18 @@ export async function onRequest(context) {  // Contents of context object
         const headers = new Headers();
         object.writeHttpMetadata(headers)
         headers.set('Content-Disposition', `inline; filename="${encodedFileName}"; filename*=UTF-8''${encodedFileName}`);
+        headers.set('Access-Control-Allow-Origin', '*');
         if (fileType) {
             headers.set('Content-Type', fileType);
         }
+        // 根据Referer设置CDN缓存策略，如果是从/或/dashboard等访问，则仅允许浏览器缓存；否则设置为public，缓存时间为7天
+        if (Referer && Referer.includes(url.origin)) {
+            headers.set('Cache-Control', 'private, max-age=86400');
+        } else {
+            headers.set('Cache-Control', 'public, max-age=604800');
+        }
 
+        // 返回图片
         const newRes = new Response(object.body, {
             status: 200,
             headers,
@@ -82,6 +92,9 @@ export async function onRequest(context) {  // Contents of context object
         return newRes;
     }
 
+
+
+    
     // Telegram及Telegraph渠道
     let TgFileID = ''; // Tg的file_id
     if (imgRecord.metadata?.Channel === 'Telegram') {
@@ -113,15 +126,23 @@ export async function onRequest(context) {  // Contents of context object
     if (response === null) {
         return new Response('Error: Failed to fetch image', { status: 500 });
     } else if (response.status === 404) {
-        return new Response('Error: Image Not Found', { status: 404 });
+        return await return404(url);
     }
     
     try {
         const headers = new Headers(response.headers);
         headers.set('Content-Disposition', `inline; filename="${encodedFileName}"; filename*=UTF-8''${encodedFileName}`);
+        headers.set('Access-Control-Allow-Origin', '*');
         if (fileType) {
             headers.set('Content-Type', fileType);
         }
+        // 根据Referer设置CDN缓存策略，如果是从/或/dashboard等访问，则仅允许浏览器缓存；否则设置为public，缓存时间为7天
+        if (Referer && Referer.includes(url.origin)) {
+            headers.set('Cache-Control', 'private, max-age=86400');
+        } else {
+            headers.set('Cache-Control', 'public, max-age=604800');
+        }
+
         const newRes =  new Response(response.body, {
             status: response.status,
             statusText: response.statusText,
@@ -140,8 +161,8 @@ export async function onRequest(context) {  // Contents of context object
 async function returnWithCheck(request, env, url, imgRecord) {
     const response = new Response('good', { status: 200 });
 
-    // Referer header equal to the dashboard page
-    if (request.headers.get('Referer') == url.origin + "/dashboard") {
+    // Referer header equal to the dashboard page or upload page
+    if (request.headers.get('Referer') && request.headers.get('Referer').includes(url.origin)) {
         //show the image
         return response;
     }
@@ -155,23 +176,14 @@ async function returnWithCheck(request, env, url, imgRecord) {
             if (record.metadata.ListType == "White") {
                 return response;
             } else if (record.metadata.ListType == "Block") {
-                if (typeof request.headers.get('Referer') == "undefined" || request.headers.get('Referer') == null || request.headers.get('Referer') == "") {
-                    return Response.redirect(url.origin + "/blockimg", 302)
-                } else {
-                    return new Response('Error: Image Blocked', { status: 404 });
-                }
-
+                return await returnBlockImg(url);
             } else if (record.metadata.Label == "adult") {
-                if (typeof request.headers.get('Referer') == "undefined" || request.headers.get('Referer') == null || request.headers.get('Referer') == "") {
-                    return Response.redirect(url.origin + "/blockimg", 302)
-                } else {
-                    return new Response('Error: Image Blocked', { status: 404 });
-                }
+                return await returnBlockImg(url);
             }
             //check if the env variables WhiteList_Mode are set
             if (env.WhiteList_Mode == "true") {
                 //if the env variables WhiteList_Mode are set, redirect to the image
-                return Response.redirect(url.origin + "/whiteliston", 302);
+                return await returnWhiteListImg(url);
             } else {
                 //if the env variables WhiteList_Mode are not set, redirect to the image
                 return response;
@@ -229,4 +241,71 @@ async function getFilePath(env, file_id) {
 
 function isTgChannel(imgRecord) {
     return imgRecord.metadata?.Channel === 'Telegram' || imgRecord.metadata?.Channel === 'TelegramNew';
+}
+
+async function return404(url) {
+    const Img404 = await fetch(url.origin + "/static/404.png");
+    if (!Img404.ok) {
+        return new Response('Error: Image Not Found',
+            {
+                status: 404,
+                headers: {
+                    "Cache-Control": "public, max-age=86400"
+                }
+            }
+        );
+    } else {
+        return new Response(Img404.body, {
+            status: 404,
+            headers: {
+                "Content-Type": "image/png",
+                "Content-Disposition": "inline",
+                "Cache-Control": "public, max-age=86400",
+            },
+        });
+    }
+}
+
+async function returnBlockImg(url) {
+    const blockImg = await fetch(url.origin + "/static/BlockImg.png");
+    if (!blockImg.ok) {
+        return new Response(null, {
+            status: 302,
+            headers: {
+                "Location": url.origin + "/blockimg",
+                "Cache-Control": "public, max-age=86400"
+            }
+        })
+    } else {
+        return new Response(blockImg.body, {
+            status: 403,
+            headers: {
+                "Content-Type": "image/png",
+                "Content-Disposition": "inline",
+                "Cache-Control": "public, max-age=86400",
+            },
+        });
+    }
+}
+
+async function returnWhiteListImg(url) {
+    const WhiteListImg = await fetch(url.origin + "/static/WhiteListOn.png");
+    if (!WhiteListImg.ok) {
+        return new Response(null, {
+            status: 302,
+            headers: {
+                "Location": url.origin + "/whiteliston",
+                "Cache-Control": "public, max-age=86400"
+            }
+        })
+    } else {
+        return new Response(WhiteListImg.body, {
+            status: 200,
+            headers: {
+                "Content-Type": "image/png",
+                "Content-Disposition": "inline",
+                "Cache-Control": "public, max-age=86400",
+            },
+        });
+    }
 }
