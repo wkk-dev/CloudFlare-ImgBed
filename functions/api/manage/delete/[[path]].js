@@ -110,10 +110,7 @@ async function deleteFile(env, fileId, cdnUrl, url) {
 
         // S3 渠道的图片，需要删除S3中对应的图片
         if (img.metadata?.Channel === 'S3') {
-            const success = await deleteS3File(img);
-            if (!success) {
-                throw new Error('S3 Delete Failed');
-            }
+            await deleteS3File(img);
         }
 
         // 删除KV存储中的记录
@@ -151,6 +148,7 @@ async function deleteS3File(img) {
             accessKeyId: img.metadata?.S3AccessKeyId,
             secretAccessKey: img.metadata?.S3SecretAccessKey
         },
+        forcePathStyle: img.metadata?.S3PathStyle || false // 是否启用路径风格
     });
 
     const bucketName = img.metadata?.S3BucketName;
