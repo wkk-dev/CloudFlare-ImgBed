@@ -1,5 +1,7 @@
 import { fetchSecurityConfig } from "../utils/sysConfig";
 import { purgeCFCache } from "../utils/purgeCache";
+import { addFileToIndex } from "../utils/indexManager.js";
+import { getDatabase } from '../utils/databaseAdapter.js';
 
 // 统一的响应创建函数
 export function createResponse(body, options = {}) {
@@ -175,6 +177,19 @@ export async function purgeCDNCache(env, cdnUrl, url, normalizedFolder) {
     }
 }
 
+// 结束上传：清除缓存，维护索引
+export async function endUpload(context, fileId, metadata) {
+    const { env, url } = context;
+
+    // 清除CDN缓存
+    const cdnUrl = `https://${url.hostname}/file/${fileId}`;
+    const normalizedFolder = (url.searchParams.get('uploadFolder') || '').replace(/^\/+/, '').replace(/\/{2,}/g, '/').replace(/\/$/, '');
+    await purgeCDNCache(env, cdnUrl, url, normalizedFolder);
+    
+    // 更新文件索引
+    await addFileToIndex(context, fileId, metadata);
+}
+
 // 从 request 中解析 ip 地址
 export function getUploadIp(request) {
     const ip = request.headers.get("cf-connecting-ip") || request.headers.get("x-real-ip") || request.headers.get("x-forwarded-for") || request.headers.get("x-client-ip") || request.headers.get("x-host") || request.headers.get("x-originating-ip") || request.headers.get("x-cluster-client-ip") || request.headers.get("forwarded-for") || request.headers.get("forwarded") || request.headers.get("via") || request.headers.get("requester") || request.headers.get("true-client-ip") || request.headers.get("client-ip") || request.headers.get("x-remote-ip") || request.headers.get("x-originating-ip") || request.headers.get("fastly-client-ip") || request.headers.get("akamai-origin-hop") || request.headers.get("x-remote-addr") || request.headers.get("x-remote-host") || request.headers.get("x-client-ips")
@@ -191,25 +206,28 @@ export function getUploadIp(request) {
 
 // 检查上传IP是否被封禁
 export async function isBlockedUploadIp(env, uploadIp) {
-    // 检查是否配置了KV数据库
-    if (typeof env.img_url == "undefined" || env.img_url == null || env.img_url == "") {
+    try {
+        const db = getDatabase(env);
+
+        let list = await db.get("manage@blockipList");
+        if (list == null) {
+            list = [];
+        } else {
+            list = list.split(",");
+        }
+
+        return list.includes(uploadIp);
+    } catch (error) {
+        console.error('Failed to check blocked IP:', error);
+        // 如果数据库未配置，默认不阻止任何IP
         return false;
     }
-
-    const kv = env.img_url;
-    let list = await kv.get("manage@blockipList");
-    if (list == null) {
-        list = [];
-    } else {
-        list = list.split(",");
-    }
-
-    return list.includes(uploadIp);
 }
 
 // 构建唯一文件ID
 export async function buildUniqueFileId(context, fileName, fileType = 'application/octet-stream') {
     const { env, url } = context;
+    const db = getDatabase(env);
 
     let fileExt = fileName.split('.').pop();
     if (!fileExt || fileExt === fileName) {
@@ -248,7 +266,7 @@ export async function buildUniqueFileId(context, fileName, fileType = 'applicati
         while (true) {
             const shortId = generateShortId(8);
             const testFullId = normalizedFolder ? `${normalizedFolder}/${shortId}.${fileExt}` : `${shortId}.${fileExt}`;
-            if (await env.img_url.get(testFullId) === null) {
+            if (await db.get(testFullId) === null) {
                 return testFullId;
             }
         }
@@ -257,7 +275,7 @@ export async function buildUniqueFileId(context, fileName, fileType = 'applicati
     }
     
     // 检查基础ID是否已存在
-    if (await env.img_url.get(baseId) === null) {
+    if (await db.get(baseId) === null) {
         return baseId;
     }
     
@@ -287,7 +305,7 @@ export async function buildUniqueFileId(context, fileName, fileType = 'applicati
         }
         
         // 检查新ID是否已存在
-        if (await env.img_url.get(duplicateId) === null) {
+        if (await db.get(duplicateId) === null) {
             return duplicateId;
         }
         

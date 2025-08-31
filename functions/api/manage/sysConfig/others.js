@@ -1,3 +1,5 @@
+import { getDatabase } from '../../../utils/databaseAdapter.js';
+
 export async function onRequest(context) {
     // 其他设置相关，GET方法读取设置，POST方法保存设置
     const {
@@ -9,11 +11,11 @@ export async function onRequest(context) {
       data, // arbitrary space for passing data between middlewares
     } = context;
 
-    const kv = env.img_url
+    const db = getDatabase(env);
 
     // GET读取设置
     if (request.method === 'GET') {
-        const settings = await getOthersConfig(kv, env)
+        const settings = await getOthersConfig(db, env)
 
         return new Response(JSON.stringify(settings), {
             headers: {
@@ -27,8 +29,8 @@ export async function onRequest(context) {
         const body = await request.json()
         const settings = body
 
-        // 写入 KV
-        await kv.put('manage@sysConfig@others', JSON.stringify(settings))
+        // 写入数据库
+        await db.put('manage@sysConfig@others', JSON.stringify(settings))
 
         return new Response(JSON.stringify(settings), {
             headers: {
@@ -39,10 +41,10 @@ export async function onRequest(context) {
 
 }
 
-export async function getOthersConfig(kv, env) {
+export async function getOthersConfig(db, env) {
     const settings = {}
-    // 读取KV中的设置
-    const settingsStr = await kv.get('manage@sysConfig@others')
+    // 读取数据库中的设置
+    const settingsStr = await db.get('manage@sysConfig@others')
     const settingsKV = settingsStr ? JSON.parse(settingsStr) : {}
 
     // 远端遥测
@@ -66,6 +68,15 @@ export async function getOthersConfig(kv, env) {
         CF_ZONE_ID: kvCloudflareApiToken.CF_ZONE_ID || env.CF_ZONE_ID,
         CF_EMAIL: kvCloudflareApiToken.CF_EMAIL || env.CF_EMAIL,
         CF_API_KEY: kvCloudflareApiToken.CF_API_KEY || env.CF_API_KEY,
+        fixed: false,
+    }
+
+    // WebDAV
+    const kvWebDAV = settingsKV.webDAV || {}
+    settings.webDAV = {
+        enabled: kvWebDAV.enabled ?? false,
+        username: kvWebDAV.username || '',
+        password: kvWebDAV.password || '',
         fixed: false,
     }
 

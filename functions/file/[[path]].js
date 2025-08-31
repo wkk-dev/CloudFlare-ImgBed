@@ -1,8 +1,9 @@
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { fetchSecurityConfig } from "../utils/sysConfig";
 import { TelegramAPI } from "../utils/telegramAPI";
-import { setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel, 
+import { setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
             returnWithCheck, return404, isDomainAllowed } from './fileTools';
+import { getDatabase } from '../utils/databaseAdapter.js';
 
 
 export async function onRequest(context) {  // Contents of context object
@@ -38,14 +39,10 @@ export async function onRequest(context) {  // Contents of context object
     if (!isDomainAllowed(context)) {
         return await returnBlockImg(url);
     }
-
-    // 检查是否配置了 KV 数据库
-    if (typeof env.img_url == "undefined" || env.img_url == null || env.img_url == "") {
-        return new Response('Error: Please configure KV database', { status: 500 });
-    }
     
-    // 从KV中获取图片记录
-    const imgRecord = await env.img_url.getWithMetadata(fileId);
+    // 从数据库中获取图片记录
+    const db = getDatabase(env);
+    const imgRecord = await db.getWithMetadata(fileId);
     if (!imgRecord) {
         return new Response('Error: Image Not Found', { status: 404 });
     }
@@ -141,7 +138,7 @@ export async function onRequest(context) {  // Contents of context object
 }
 
 
-// 处理分片文件读取
+// 处理 Telegram 渠道分片文件读取
 async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fileType) {
     const { env, request, url, Referer } = context;
 
@@ -280,6 +277,8 @@ async function handleTelegramChunkedFile(context, imgRecord, encodedFileName, fi
                 headers,
             });
         } else {
+            headers.set('Cache-Control', 'private, max-age=86400'); // CDN 不缓存完整文件，避免 CDN 不支持 Range 请求
+            
             return new Response(stream, {
                 status: 200,
                 headers,
@@ -346,15 +345,19 @@ async function handleR2File(context, fileId, encodedFileName, fileType) {
         let object;
         
         if (range) {
-            // 处理Range请求（用于大文件流式传输）
+            // 处理Range请求
             const matches = range.match(/bytes=(\d+)-(\d*)/);
             if (matches) {
                 const start = parseInt(matches[1]);
                 const end = matches[2] ? parseInt(matches[2]) : undefined;
-                
-                const rangeOptions = { offset: start };
+
+                const rangeOptions = { 
+                    range: {
+                        offset: start
+                    }
+                };
                 if (end !== undefined) {
-                    rangeOptions.length = end - start + 1;
+                    rangeOptions.range.length = end - start + 1;
                 }
                 
                 object = await R2DataBase.get(fileId, rangeOptions);
