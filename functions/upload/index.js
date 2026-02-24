@@ -1,7 +1,7 @@
 import { userAuthCheck, UnauthorizedResponse } from "../utils/userAuth";
 import { fetchUploadConfig, fetchSecurityConfig } from "../utils/sysConfig";
 import {
-    createResponse, getUploadIp, getIPAddress, isExtValid,
+    createResponse, getUploadIp, getIPAddress, resolveFileExt,
     moderateContent, purgeCDNCache, isBlockedUploadIp, buildUniqueFileId, endUpload, getImageDimensions,
     sanitizeUploadFolder
 } from "./uploadTools";
@@ -156,6 +156,8 @@ async function processFileUpload(context, formdata = null) {
         uploadFolder = fileName.split('/').slice(0, -1).join('/');
         // 对从文件名中提取的路径也进行安全处理
         uploadFolder = sanitizeUploadFolder(uploadFolder);
+        // 从文件名中去除路径信息，只保留文件名部分
+        fileName = fileName.split('/').pop();
     }
     // uploadFolder 已经过 sanitizeUploadFolder 处理，直接使用
     const normalizedFolder = uploadFolder;
@@ -180,15 +182,7 @@ async function processFileUpload(context, formdata = null) {
         metadata.Height = imageDimensions.height;
     }
 
-    let fileExt = fileName.split('.').pop(); // 文件扩展名
-    if (!isExtValid(fileExt)) {
-        // 如果文件名中没有扩展名，尝试从文件类型中获取
-        fileExt = fileType.split('/').pop();
-        if (fileExt === fileType || fileExt === '' || fileExt === null || fileExt === undefined) {
-            // Type中无法获取扩展名
-            fileExt = 'unknown' // 默认扩展名
-        }
-    }
+    const fileExt = resolveFileExt(fileName, fileType);
 
     // 构建文件ID
     const fullId = await buildUniqueFileId(context, fileName, fileType);
